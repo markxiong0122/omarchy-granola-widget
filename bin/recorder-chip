@@ -1,0 +1,101 @@
+#!/usr/bin/python3
+"""Shrink the Meeting Recorder window to its compact strip.
+
+Usage:
+    recorder-chip
+
+`omarchy-meeting-recorder start` opens the full window when the app is not
+running. The plugin wants the Granola shape instead: a small floating strip
+with the clock and the two waves. This waits for that window, and only if it
+is still the full one, asks the app to switch to compact. It is a no-op when
+the window is already a strip, so running it again cannot expand it.
+
+The strip needs the window to float. install.sh adds the Hyprland rule; without
+it the strip is still small, but it tiles.
+"""
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+CLASS = "com.jankeesvw.OmarchyMeetingRecorder"
+FULL_HEIGHT = 260
+TRIES = 40
+DELAY = 0.25
+TIMEOUT = 5
+
+
+def status() -> dict:
+    """One status line from the recorder's socket, or {} when it is not up."""
+    path = os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""),
+                        "omarchy-meeting-recorder.sock")
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(0.6)
+    try:
+        sock.connect(path)
+        data = sock.recv(4096).decode("utf-8", errors="replace")
+    except OSError:
+        return {}
+    finally:
+        sock.close()
+    for line in data.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def clients() -> list[dict]:
+    result = subprocess.run(
+        ["hyprctl", "clients", "-j"],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        data = json.loads(result.stdout or "[]")
+    except ValueError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def main() -> int:
+    # `compact` only applies while recording, and it toggles: send it once,
+    # after the state says recording, and only if a window is still full.
+    for _ in range(TRIES):
+        if status().get("state") == "recording":
+            windows = [
+                window
+                for window in clients()
+                if str(window.get("class", "")) == CLASS
+                and window.get("mapped", True)
+            ]
+            # The state can turn recording a moment before the window maps, so
+            # keep waiting for one instead of giving up early.
+            if not windows:
+                time.sleep(DELAY)
+                continue
+            if any(int((window.get("size") or [0, 0])[1] or 0) > FULL_HEIGHT
+                   for window in windows):
+                subprocess.run(
+                    ["omarchy-meeting-recorder", "compact"],
+                    capture_output=True,
+                    timeout=TIMEOUT,
+                )
+            return 0
+        time.sleep(DELAY)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        raise SystemExit(0)

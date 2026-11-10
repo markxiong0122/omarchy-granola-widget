@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Start a recording and leave only the recorder's compact strip on screen.
+#
+# The app opens its full window when it is not running, so this starts the
+# recording and then asks the window to shrink. Detached on purpose: `start`
+# stays alive as the app for the whole session, and the plugin only wants it
+# to run.
+set -euo pipefail
+
+here="$(dirname "$(readlink -f "$0")")"
+
+omarchy-meeting-recorder start >/dev/null 2>&1 &
+exec /usr/bin/python3 "$here/recorder-chip"

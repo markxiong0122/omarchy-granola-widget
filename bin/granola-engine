@@ -1,0 +1,323 @@
+#!/usr/bin/env node
+// Drive the official Granola desktop client from the plugin.
+//
+// Granola has no CLI or local socket, so this uses Electron's DevTools
+// protocol: it launches the app with a debugging port, clicks the same
+// "New note" button a person would, and reads the app's own
+// getNubInitialState() for the recording state. The app keeps doing the
+// capture, transcription and summary; this file only starts and stops it.
+//
+// Usage:
+//   granola-engine start [--title NAME]   start a note, hide the main window
+//   granola-engine stop                   stop the current note
+//   granola-engine state                  one JSON line of state
+//   granola-engine watch                  NDJSON state, once a second
+//   granola-engine show                   bring the main window back
+//   granola-engine hide                   move the main window away
+//   granola-engine ensure                 launch the app if it is not up
+//
+// Commands are best-effort: when Granola is not installed or CDP is not up,
+// they exit non-zero and print a reason on stderr.
+import { spawn, execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+const APP = join(homedir(), ".local/share/omarchy-meeting-notes/granola/granola.sh");
+const PORT = Number(process.env.GRANOLA_DEBUG_PORT || 9223);
+const BASE = `http://127.0.0.1:${PORT}`;
+const SPECIAL = "special:granola";
+const WAIT = 12000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function targets() {
+  try {
+    const response = await fetch(`${BASE}/json`, { signal: AbortSignal.timeout(1500) });
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function mainTarget(list) {
+  return (list || []).find(
+    (t) => t.type === "page" && String(t.url).startsWith("app://ui/")
+      && !String(t.url).includes("nub"),
+  );
+}
+
+async function waitMain(timeout = WAIT) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const target = await mainTarget(await targets());
+    if (target) return target;
+    await sleep(250);
+  }
+  return null;
+}
+
+async function connect(target) {
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  let next = 0;
+  const pending = new Map();
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.id && pending.has(message.id)) {
+      pending.get(message.id)(message);
+      pending.delete(message.id);
+    }
+  };
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = () => reject(new Error("could not connect to Granola's debugger"));
+  });
+  const send = (method, params) => new Promise((resolve) => {
+    const id = ++next;
+    pending.set(id, resolve);
+    socket.send(JSON.stringify({ id, method, params }));
+  });
+  return {
+    async eval(expression) {
+      const reply = await send("Runtime.evaluate", {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+      });
+      if (reply.result?.exceptionDetails) {
+        throw new Error(reply.result.exceptionDetails.text || "evaluation failed");
+      }
+      return reply.result?.result?.value;
+    },
+    close() { socket.close(); },
+  };
+}
+
+async function ensure() {
+  if (!existsSync(APP)) {
+    throw new Error("Granola is not installed; run bin/granola-linux");
+  }
+  if (await targets()) return;
+  // An app launched by hand has no debugger. Take it over: otherwise the new
+  // instance becomes a secondary and never opens a port.
+  try {
+    const listing = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
+    for (const line of listing.split("\n")) {
+      if (!line.includes("/omarchy-meeting-notes/granola/electron")) continue;
+      if (line.includes("--type=")) continue;
+      const pid = Number(line.trim().split(/\s+/)[0]);
+      if (pid) process.kill(pid, "SIGTERM");
+    }
+    await sleep(1500);
+  } catch {}
+  const child = spawn(APP, [
+    "--ozone-platform=wayland",
+    `--remote-debugging-port=${PORT}`,
+    "--remote-allow-origins=*",
+  ], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  if (await waitMain()) return;
+  throw new Error("Granola did not open its debugger; launch it from the plugin once");
+}
+
+function lua(expression) {
+  try {
+    execFileSync("hyprctl", ["dispatch", expression], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Omarchy's Hyprland config is Lua, so the legacy "movetoworkspacesilent
+// special:x,class:y" form does not parse. This is the same dispatcher the
+// SUPER+ALT+S scratchpad binding uses, aimed at Granola's main window only
+// (the Nub is a second window of the same class).
+function moveMain(where) {
+  const workspace = where === "show" ? "e+0" : SPECIAL;
+  const follow = where === "show" ? "true" : "false";
+  // Match the exact class AND title: Granola's Nub is the same class, and a
+  // loose title selector can hit a browser tab with "Granola" in its title.
+  const expression = "(function()"
+    + " for _, w in ipairs(hl.get_windows()) do"
+    + " if w.class == 'granola' and w.title == 'Granola' then"
+    + ` return hl.dsp.window.move({ window = w, workspace = '${workspace}', follow = ${follow} })`
+    + " end end return hl.dsp.no_op() end)()";
+  return lua(expression);
+}
+
+function nubExpression() {
+  return "window.electron && window.electron.getNubInitialState"
+    + " ? window.electron.getNubInitialState() : null";
+}
+
+async function readState() {
+  const list = await targets();
+  const target = await mainTarget(list);
+  if (!target) return { running: false, transcribing: false, id: "", url: "", title: "" };
+  let page;
+  try {
+    page = await connect(target);
+    const nub = await page.eval(nubExpression());
+    const transcription = String(nub?.document?.transcriptionState || "");
+    return {
+      running: true,
+      transcribing: !!(nub && nub.visible && nub.document
+        && transcription === "active"),
+      id: nub?.document?.id || "",
+      url: target.url,
+      title: nub?.document?.title || "",
+      state: transcription,
+    };
+  } catch {
+    return { running: true, transcribing: false, id: "", url: target.url, title: "", state: "" };
+  } finally {
+    page?.close();
+  }
+}
+
+function quitApp() {
+  try {
+    const listing = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
+    for (const line of listing.split("\n")) {
+      if (!line.includes("/omarchy-meeting-notes/granola/electron")) continue;
+      if (line.includes("--type=")) continue;
+      const pid = Number(line.trim().split(/\s+/)[0]);
+      if (pid) process.kill(pid, "SIGTERM");
+    }
+  } catch {}
+}
+
+async function start() {
+  await ensure();
+  const target = await waitMain();
+  if (!target) throw new Error("Granola's main window is not reachable");
+  const page = await connect(target);
+  try {
+    const before = await page.eval(nubExpression());
+    if (before && before.document
+        && String(before.document.transcriptionState || "") === "active") {
+      moveMain("hide");
+      return;
+    }
+    if (before && before.document && before.document.id) {
+      // An old, finished note is open. Go home before creating a new one.
+      await page.eval(
+        "(() => { const b = [...document.querySelectorAll('button')]"
+        + ".find(e => (e.getAttribute('aria-label') || e.textContent.trim()) === 'Back');"
+        + " if (b) b.click(); })()",
+      );
+      await sleep(900);
+    }
+    // The app is React: the page target exists before the Home screen has
+    // rendered, especially right after a launch.
+    let clicked = false;
+    const buttonDeadline = Date.now() + WAIT;
+    while (Date.now() < buttonDeadline) {
+      clicked = await page.eval(
+        "(() => { const b = [...document.querySelectorAll('button')]"
+        + ".find(e => (e.getAttribute('aria-label') || e.textContent.trim()) === 'New note');"
+        + " if (!b) return false; b.click(); return true; })()",
+      );
+      if (clicked) break;
+      await sleep(300);
+    }
+    if (!clicked) throw new Error("the New note button is not on screen");
+    const deadline = Date.now() + WAIT;
+    while (Date.now() < deadline) {
+      const list = await targets();
+      const meeting = (list || []).find(
+        (t) => t.type === "page" && String(t.url).includes("app://ui/#/meeting/"),
+      );
+      if (meeting) break;
+      await sleep(250);
+    }
+    await sleep(600);
+    moveMain("hide");
+  } finally {
+    page.close();
+  }
+}
+
+async function stop() {
+  const list = await targets();
+  const target = await mainTarget(list);
+  if (!target) return;
+  const page = await connect(target);
+  try {
+    const nub = await page.eval(nubExpression());
+    const id = String(nub?.document?.id || "");
+    if (!id) return;
+    // The renderer's own Stop button lands here: turn capture off for this
+    // document. Unlike clicking Back, this keeps the note instead of
+    // navigating away (and deleting it when it is empty).
+    await page.eval(
+      "window.electron.setDesiredTranscriptionState("
+      + `{ capture: false, documentId: ${JSON.stringify(id)} })`,
+    );
+    const deadline = Date.now() + WAIT;
+    while (Date.now() < deadline) {
+      const state = await page.eval(nubExpression());
+      if (String(state?.document?.transcriptionState || "") !== "active") break;
+      await sleep(250);
+    }
+    moveMain("hide");
+    // Granola is an Electron app; keeping its three renderers alive after the
+    // meeting costs hundreds of MB. Close it once the note has settled, unless
+    // the user asked to keep it.
+    if (!process.env.GRANOLA_KEEP_RUNNING) {
+      await sleep(20000);
+      const settled = await readState();
+      if (!settled.transcribing) quitApp();
+    }
+  } finally {
+    page.close();
+  }
+}
+
+async function main() {
+  const [command = "state"] = process.argv.slice(2);
+  switch (command) {
+    case "ensure":
+      await ensure();
+      return;
+    case "start":
+      await start();
+      return;
+    case "stop":
+      await stop();
+      return;
+    case "show":
+      moveMain("show");
+      return;
+    case "hide":
+      moveMain("hide");
+      return;
+    case "quit":
+      quitApp();
+      return;
+    case "state":
+      console.log(JSON.stringify(await readState()));
+      return;
+    case "watch": {
+      for (;;) {
+        try {
+          console.log(JSON.stringify(await readState()));
+        } catch (error) {
+          console.log(JSON.stringify({ running: true, transcribing: false, error: error.message }));
+        }
+        await sleep(1000);
+      }
+    }
+    default:
+      throw new Error(`unknown command: ${command}`);
+  }
+}
+
+main().catch((error) => {
+  console.error(`granola-engine: ${error.message}`);
+  process.exit(1);
+});

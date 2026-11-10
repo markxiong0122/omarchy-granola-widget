@@ -1,0 +1,194 @@
+#!/usr/bin/python3
+"""List Meeting Recorder meetings for the Quickshell panel.
+
+Usage: meeting-notes-index [--query TEXT] [meetings-dir] [limit]
+
+Prints a JSON array, newest first. Each item carries what the panel needs to
+draw a row and load the text beside it. Nothing here writes; the folder is
+Meeting Recorder's, and the enhanced note is written by bin/enhanced-notes.
+
+With --query, only meetings whose title, enhanced note or transcript contains
+the text are returned, each with a `snippet` around the first match.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+DEFAULT_DIR = "~/Documents/Meetings"
+DEFAULT_LIMIT = 40
+PREVIEW_CHARS = 180
+SNIPPET_CHARS = 220
+
+
+def read_manifest(folder: Path) -> dict:
+    manifests = sorted(folder.glob("*.meeting-recorder"))
+    if not manifests:
+        return {}
+    try:
+        data = json.loads(manifests[0].read_text(encoding="utf-8", errors="replace"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def plain_text(text: str) -> str:
+    text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*]\s+\[[ xX]\]\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
+    text = re.sub(r"[*_`>#]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def preview_of(path: Path) -> str:
+    try:
+        return plain_text(path.read_text(encoding="utf-8", errors="replace"))[:PREVIEW_CHARS]
+    except OSError:
+        return ""
+
+
+def snippet_of(text: str, query: str) -> str:
+    if not query:
+        return ""
+    position = text.lower().find(query.lower())
+    if position < 0:
+        return text[:SNIPPET_CHARS]
+    start = max(0, position - SNIPPET_CHARS // 2)
+    end = min(len(text), position + len(query) + SNIPPET_CHARS // 2)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    return prefix + text[start:end].strip() + suffix
+
+
+def folder_started(folder: Path, manifest: dict):
+    started = manifest.get("started_at")
+    if isinstance(started, (int, float)):
+        return int(started)
+    match = re.match(r"^(\d{12})", folder.name)
+    if match:
+        try:
+            return int(datetime.strptime(match.group(1), "%Y%m%d%H%M").timestamp())
+        except ValueError:
+            return None
+    return None
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--query", default="")
+    parser.add_argument("--granola", action="store_true")
+    parser.add_argument("directory", nargs="?", default=DEFAULT_DIR)
+    parser.add_argument("limit", nargs="?", type=int, default=DEFAULT_LIMIT)
+    args = parser.parse_args()
+
+    base = Path(os.path.expanduser(args.directory))
+    limit = max(1, min(200, args.limit or DEFAULT_LIMIT))
+    query = args.query.strip()
+
+    items = []
+    if base.is_dir():
+        folders = [p for p in base.iterdir() if p.is_dir() and not p.name.startswith(".")]
+        # Folder names start with YYYYMMDDHHMM, so a reverse name sort is a
+        # date sort even for meetings whose manifest is missing.
+        folders.sort(key=lambda p: p.name, reverse=True)
+        if not query:
+            folders = folders[: limit * 4]
+
+        for folder in folders:
+            manifest = read_manifest(folder)
+            enhanced = folder / "enhanced.md"
+            transcript = folder / "transcript.md"
+            notes = folder / "notes.md"
+            if enhanced.is_file():
+                note, kind = enhanced, "enhanced"
+            elif transcript.is_file():
+                note, kind = transcript, "transcript"
+            else:
+                note, kind = None, "none"
+
+            title = str(manifest.get("title") or folder.name.split(" ", 1)[-1])
+            preview = preview_of(note) if note else ""
+            snippet = ""
+
+            if query:
+                haystack = [title, preview]
+                if note and note.is_file():
+                    try:
+                        haystack.append(plain_text(note.read_text(encoding="utf-8", errors="replace")))
+                    except OSError:
+                        pass
+                if transcript.is_file():
+                    try:
+                        transcript_text = plain_text(
+                            transcript.read_text(encoding="utf-8", errors="replace")
+                        )
+                        haystack.append(transcript_text)
+                    except OSError:
+                        transcript_text = ""
+                else:
+                    transcript_text = ""
+                if query.lower() not in "\n".join(haystack).lower():
+                    continue
+                snippet = snippet_of("\n".join(haystack[2:]) or preview, query)
+
+            items.append(
+                {
+                    "key": f"local:{folder.name}",
+                    "source": "local",
+                    "dir": str(folder),
+                    "name": folder.name,
+                    "title": title,
+                    "started_at": folder_started(folder, manifest),
+                    "duration_secs": int(manifest.get("duration_secs") or 0),
+                    "speakers": [str(s) for s in manifest.get("speakers") or []],
+                    "note_path": str(note) if note else "",
+                    "note_kind": kind,
+                    "transcript_path": str(transcript) if transcript.is_file() else "",
+                    "notes_path": str(notes) if notes.is_file() else "",
+                    "preview": preview,
+                    "snippet": snippet,
+                    "has_transcript": transcript.is_file(),
+                }
+            )
+            if len(items) >= limit:
+                break
+
+        if args.granola:
+            granola = Path(__file__).with_name("granola-index")
+            if granola.is_file():
+                try:
+                    result = subprocess.run(
+                        ["/usr/bin/python3", str(granola), str(min(20, limit))],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    extra = json.loads(result.stdout or "[]")
+                    if isinstance(extra, list):
+                        if query:
+                            needle = query.lower()
+                            extra = [
+                                item
+                                for item in extra
+                                if needle
+                                in (str(item.get("title", "")) + " " + str(item.get("preview", ""))).lower()
+                            ]
+                        items.extend(extra)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    pass
+
+        items.sort(key=lambda x: (x["started_at"] or 0, x["name"]), reverse=True)
+
+    print(json.dumps(items[:limit], ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        raise SystemExit(0)

@@ -1,0 +1,91 @@
+#!/usr/bin/python3
+"""Say whether an app is using the microphone, for Meeting Notes.
+
+Usage:
+    meeting-active
+
+Prints one JSON object:
+
+    {"active": true, "label": "Google Chrome", "binary": "chrome"}
+    {"active": false}
+
+A microphone capture stream is the cheapest reliable meeting signal: joining a
+Meet, Zoom, Teams, Webex or Discord call opens one, and no calendar, account or
+network request is involved. The recorder's own capture is ignored, so this can
+run while a recording is in progress.
+
+Uses pactl's JSON output, which PipeWire's PulseAudio server provides.
+"""
+import json
+import subprocess
+import sys
+
+# Applications that capture audio without being a meeting. The recorder is the
+# important one: without it, starting a recording would immediately look like a
+# meeting starting.
+SKIP = (
+    "meeting-recorder",
+    "meeting recorder",
+    "parec",
+    "pacat",
+    "pw-record",
+    "arecord",
+    "ffmpeg",
+    "obs",
+    "audacity",
+    "ardour",
+    "kdenlive",
+)
+
+TIMEOUT = 5
+
+
+def source_outputs() -> list[dict]:
+    result = subprocess.run(
+        ["pactl", "-f", "json", "list", "source-outputs"],
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "pactl failed").strip())
+    data = json.loads(result.stdout or "[]")
+    return data if isinstance(data, list) else []
+
+
+def main() -> int:
+    try:
+        outputs = source_outputs()
+    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(json.dumps({"active": False, "error": str(error)}))
+        return 0
+
+    for output in outputs:
+        if output.get("corked"):
+            continue
+        properties = output.get("properties") or {}
+        name = str(properties.get("application.name") or "")
+        binary = str(properties.get("application.process.binary") or "")
+        haystack = (name + " " + binary).lower()
+        if any(skip in haystack for skip in SKIP):
+            continue
+        print(
+            json.dumps(
+                {
+                    "active": True,
+                    "label": name or binary or "An app",
+                    "binary": binary,
+                }
+            )
+        )
+        return 0
+
+    print(json.dumps({"active": False}))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        raise SystemExit(0)

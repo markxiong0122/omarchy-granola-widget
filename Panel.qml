@@ -12,7 +12,7 @@ import qs.Ui
 // a request to the recorder, never a file of its own.
 BarWidget {
   id: root
-  moduleName: "markxiong.meeting-notes"
+  moduleName: "markxiong.granola"
 
   // Touching the singleton is what creates it; it watches the microphone and
   // shows the prompt even while this popup is closed.

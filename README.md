@@ -1,10 +1,11 @@
-# Meeting Notes for Omarchy
+# Omarchy Granola Widget
 
-A Granola-shaped meeting notepad for [Omarchy](https://omarchy.org): a light
-bar plugin that records the meeting, transcribes it locally, turns it into an
-enhanced note, and keeps every past meeting one click away.
+Granola-shaped meeting notes in the [Omarchy](https://omarchy.org) bar: a notes
+panel, meeting detection, and — when Granola's desktop app is installed —
+Granola's own transcription and summaries on Linux. A local recorder remains as
+a fallback.
 
-![The Meeting Notes panel](docs/panel.png)
+![The Granola widget panel](docs/panel.png)
 
 It is a thin layer over [jankeesvw/omarchy-meeting-recorder](https://github.com/jankeesvw/omarchy-meeting-recorder),
 which already records your microphone and the computer audio as two tracks,
@@ -24,9 +25,10 @@ Granola-shaped parts:
 - **Granola notes** — connect once with Granola's official MCP OAuth and the
   same list shows your Granola notes read-only alongside local meetings.
 
-Everything stays on this machine. It does not write into a Granola account:
-Granola's API is read-only, so a local recorder cannot push notes or audio into
-it. This is the local-first alternative.
+With the local recorder, nothing leaves this machine. With Granola's engine the
+audio goes to Granola's transcription service (Deepgram/AssemblyAI) and the note
+lives in your Granola account — that is the point of using it. Either way the
+plugin only reads Granola's notes through MCP; it never writes into the account.
 
 ## Requirements
 
@@ -39,14 +41,14 @@ it. This is the local-first alternative.
 ## Install
 
 ```bash
-git clone <this-repo> ~/Work/omarchy-meeting-notes
-cd ~/Work/omarchy-meeting-notes
+git clone <this-repo> ~/Work/omarchy-granola-widget
+cd ~/Work/omarchy-granola-widget
 ./install.sh
 ```
 
 The installer:
 
-- symlinks the repo root to `~/.config/omarchy/plugins/markxiong.meeting-notes`
+- symlinks the repo root to `~/.config/omarchy/plugins/markxiong.granola`
 - rescans and enables the bar widget on the right
 - appends the `Enhanced notes` action to
   `~/.config/omarchy-meeting-recorder/config.toml`
@@ -58,7 +60,7 @@ It never edits your Hyprland keybindings. To open the panel with a key, add to
 `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + ALT + M", "Meeting notes", "omarchy-shell shell toggle markxiong.meeting-notes")
+o.bind("SUPER + ALT + M", "Granola", "omarchy-shell shell toggle markxiong.granola")
 ```
 
 ## Meeting detection
@@ -293,7 +295,7 @@ somewhere else, add `meetingDir` to its entry in `~/.config/omarchy/shell.json`:
 
 ```json
 {
-  "id": "markxiong.meeting-notes",
+  "id": "markxiong.granola",
   "meetingDir": "/path/to/meetings",
   "granolaSource": true
 }
@@ -327,7 +329,7 @@ The repo root is the plugin folder: `manifest.json`, `Panel.qml`,
 directly from git:
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-meeting-notes.git --enable
+omarchy plugin add https://github.com/markxiong0122/omarchy-granola-widget.git --enable
 ```
 
 `install.sh` is the local-development path; it symlinks the repo root into
@@ -354,8 +356,8 @@ The helpers use only Python's standard library.
 ## Uninstall
 
 ```bash
-omarchy plugin disable markxiong.meeting-notes
-rm ~/.config/omarchy/plugins/markxiong.meeting-notes
+omarchy plugin disable markxiong.granola
+rm ~/.config/omarchy/plugins/markxiong.granola
 ```
 
 Remove the `[[action]]` block named `Enhanced notes` from

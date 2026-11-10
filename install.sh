@@ -11,7 +11,7 @@
 set -euo pipefail
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-plugin_id="markxiong.meeting-notes"
+plugin_id="markxiong.granola"
 plugins_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
 plugin_link="$plugins_dir/$plugin_id"
 recorder_config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-meeting-recorder/config.toml"
@@ -23,7 +23,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 command -v omarchy >/dev/null 2>&1 || die "omarchy not found; this is for Omarchy"
 command -v omarchy-shell >/dev/null 2>&1 || die "omarchy-shell not found; start the Omarchy shell first"
 
-[[ -f "$here/manifest.json" ]] || die "run this from the omarchy-meeting-notes folder"
+[[ -f "$here/manifest.json" ]] || die "run this from the omarchy-granola-widget folder"
 
 say "==> Checking the plugin manifest"
 omarchy plugin validate "$here" >/dev/null
@@ -66,7 +66,7 @@ try:
 except Exception:
     print("no")
     raise SystemExit
-print("yes" if any(p.get("id") == "markxiong.meeting-notes" and p.get("enabled") for p in plugins) else "no")
+print("yes" if any(p.get("id") == "markxiong.granola" and p.get("enabled") for p in plugins) else "no")
 ')"
 if [[ "$enabled" == "yes" ]]; then
   say "    already enabled"
@@ -87,7 +87,7 @@ if 'name = "Enhanced notes"' in text:
     raise SystemExit
 config.parent.mkdir(parents=True, exist_ok=True)
 block = (
-    "\n# Granola-style notes for every meeting (markxiong.meeting-notes)\n"
+    "\n# Granola in the Omarchy bar (markxiong.granola)\n"
     "[[action]]\n"
     'name = "Enhanced notes"\n'
     f'command = "{action}"\n'

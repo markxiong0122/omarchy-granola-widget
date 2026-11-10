@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "markxiong.meeting-notes",
-  "name": "Meeting Notes",
+  "id": "markxiong.granola",
+  "name": "Granola",
   "version": "0.3.0",
   "author": "Mark Xiong",
-  "description": "Granola-shaped meeting notes for the Omarchy bar: a notes panel, meeting detection, local recording or Granola's own engine, and read-only Granola notes",
-  "homepage": "https://github.com/markxiong0122/omarchy-meeting-notes",
+  "description": "Granola in the Omarchy bar: a notes panel, meeting detection, and Granola's own engine on Linux",
+  "homepage": "https://github.com/markxiong0122/omarchy-granola-widget",
   "license": "MIT",
   "kinds": [
     "bar-widget"
@@ -14,8 +14,8 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Meeting Notes",
-    "description": "Record meetings, read enhanced notes, search, and connect Granola",
+    "displayName": "Granola",
+    "description": "Record with Granola, read notes, search, and browse Granola history",
     "category": "Productivity",
     "allowMultiple": false,
     "defaultSection": "right"

@@ -197,6 +197,10 @@ The plugin polls it once a minute and shows a card two minutes before an event:
 the title, when it starts, **Start Granola**, **Join** when the event has a
 Meet/Zoom/Teams link, and **Dismiss**.
 
+**Start Granola** clicks that event in the app's “Coming up” list, so the note
+is the calendar event with its title and attendees, not a blank “New note”. If
+Granola no longer lists the event, the engine falls back to New note.
+
 This is a private endpoint (`POST /v1/refresh-calendar-events`), so it can
 change with a Granola update; the plugin treats it as best-effort.
 

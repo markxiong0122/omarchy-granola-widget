@@ -317,7 +317,20 @@ function parseCalendar(body, minutes) {
   return events;
 }
 
-async function start() {
+async function waitMeeting(timeout = WAIT) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const list = await targets();
+    const meeting = (list || []).find(
+      (t) => t.type === "page" && String(t.url).includes("app://ui/#/meeting/"),
+    );
+    if (meeting) return meeting;
+    await sleep(250);
+  }
+  return null;
+}
+
+async function start(title = "") {
   await ensure();
   const target = await waitMain();
   if (!target) throw new Error("Granola's main window is not reachable");
@@ -337,6 +350,28 @@ async function start() {
         + " if (b) b.click(); })()",
       );
       await sleep(900);
+    }
+    if (title !== "") {
+      // Click the matching event in "Coming up", not New note: Granola then
+      // creates the note from the calendar event, with its title and context.
+      const clickedEvent = await page.eval(
+        "(() => { const title = " + JSON.stringify(title) + ";"
+        + " const nodes = [...document.querySelectorAll('[role=button], button, a')];"
+        + " const el = nodes.find(e => {"
+        + "   const t = e.textContent.replace(/\\s+/g, ' ');"
+        + "   return t.includes(title)"
+        + "     && /\\d{1,2}:\\d{2}\\s*[–-]\\s*\\d{1,2}:\\d{2}/.test(t);"
+        + " });"
+        + " if (!el) return false; el.click(); return true; })()",
+      );
+      if (clickedEvent) {
+        const meeting = await waitMeeting();
+        if (meeting) {
+          await sleep(900);
+          moveMain("hide");
+          return;
+        }
+      }
     }
     // The app is React: the page target exists before the Home screen has
     // rendered, especially right after a launch.
@@ -405,13 +440,16 @@ async function stop() {
 }
 
 async function main() {
-  const [command = "state"] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const [command = "state"] = args;
+  const titleAt = args.indexOf("--title");
+  const title = titleAt > 0 ? String(args[titleAt + 1] || "") : "";
   switch (command) {
     case "ensure":
       await ensure();
       return;
     case "start":
-      await start();
+      await start(title);
       return;
     case "stop":
       await stop();

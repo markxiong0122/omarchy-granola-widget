@@ -154,7 +154,9 @@ Item {
   }
 
   function startCalendar() {
-    root.startRecording()
+    var title = root.calendarEvent
+      ? String(root.calendarEvent.summary || "") : ""
+    root.startRecording(title)
     root.dismissCalendar()
   }
 
@@ -179,10 +181,14 @@ Item {
     root.seen = true
   }
 
-  function startRecording() {
-    recordProc.command = root.useGranola
-      ? ["/usr/bin/env", "node", root.enginePath, "start"]
-      : ["/usr/bin/env", "bash", root.startHelperPath]
+  function startRecording(title) {
+    if (root.useGranola) {
+      var args = ["/usr/bin/env", "node", root.enginePath, "start"]
+      if (title && String(title).trim() !== "") args.push("--title", String(title))
+      recordProc.command = args
+    } else {
+      recordProc.command = ["/usr/bin/env", "bash", root.startHelperPath]
+    }
     recordProc.running = true
     root.dismiss()
   }

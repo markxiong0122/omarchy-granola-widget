@@ -19,7 +19,7 @@
 // Commands are best-effort: when Granola is not installed or CDP is not up,
 // they exit non-zero and print a reason on stderr.
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +28,9 @@ const PORT = Number(process.env.GRANOLA_DEBUG_PORT || 9223);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SPECIAL = "special:granola";
 const WAIT = 12000;
+const CACHE_DIR = join(homedir(), ".cache/omarchy-meeting-notes");
+const TOKEN_FILE = join(CACHE_DIR, "granola-token.json");
+const API = "https://api.granola.ai/v1";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -191,6 +194,129 @@ function quitApp() {
   } catch {}
 }
 
+function cachedToken() {
+  try {
+    const data = JSON.parse(readFileSync(TOKEN_FILE, "utf8"));
+    if (data.token && Number(data.exp || 0) > Math.floor(Date.now() / 1000) + 120) {
+      return data.token;
+    }
+  } catch {}
+  return "";
+}
+
+function saveToken(token) {
+  let exp = 0;
+  try {
+    exp = Number(JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString()).exp) || 0;
+  } catch {}
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(TOKEN_FILE, JSON.stringify({ token, exp }), { mode: 0o600 });
+  try { chmodSync(TOKEN_FILE, 0o600); } catch {}
+}
+
+async function apiToken() {
+  const cached = cachedToken();
+  if (cached) return cached;
+  const launched = !(await targets());
+  await ensure();
+  const target = await waitMain();
+  if (!target) throw new Error("Granola's main window is not reachable");
+  const page = await connect(target);
+  try {
+    const token = await page.eval("window.electron.getRefreshedAccessToken()");
+    if (!token) throw new Error("Granola returned no session token");
+    saveToken(token);
+    return token;
+  } finally {
+    page.close();
+    if (launched) {
+      await sleep(1200);
+      quitApp();
+    }
+  }
+}
+
+function joinUrl(event) {
+  const candidates = [event.hangoutLink || ""];
+  for (const entry of (event.conferenceData && event.conferenceData.entryPoints) || []) {
+    candidates.push(entry.uri || "");
+  }
+  candidates.push(event.location || "");
+  const text = [event.location || "", event.description || "", event.summary || ""].join(" ");
+  const patterns = [
+    /https:\/\/meet\.google\.com\/[A-Za-z0-9?=&_./%-]+/i,
+    /https:\/\/[\w.-]*zoom\.us\/j\/[A-Za-z0-9?=&_./%-]+/i,
+    /https:\/\/[\w.-]*teams\.microsoft\.com\/l\/meetup-join\/[A-Za-z0-9?=&_./%:-]+/i,
+    /https:\/\/[\w.-]*webex\.com\/[A-Za-z0-9?=&_./%:-]+/i,
+  ];
+  for (const candidate of candidates) {
+    if (/^https?:\/\//i.test(candidate)) return candidate;
+  }
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[0].replace(/[.,;)]+$/, "");
+  }
+  return "";
+}
+
+function eventStart(event) {
+  const value = event.start || {};
+  const stamp = value.dateTime || value.date || "";
+  if (!stamp) return null;
+  const date = new Date(stamp);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function calendar(minutes) {
+  const token = await apiToken();
+  const response = await fetch(`${API}/refresh-calendar-events`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: "",
+  });
+  if (response.status === 401) {
+    // The cached token was rejected; refresh once through the app.
+    const fresh = await apiToken();
+    if (fresh === token) throw new Error("Granola rejected the calendar token");
+    const retry = await fetch(`${API}/refresh-calendar-events`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${fresh}`, "Content-Type": "application/json" },
+      body: "",
+    });
+    if (!retry.ok) throw new Error(`Granola calendar HTTP ${retry.status}`);
+    return parseCalendar(await retry.json(), minutes);
+  }
+  if (!response.ok) throw new Error(`Granola calendar HTTP ${response.status}`);
+  return parseCalendar(await response.json(), minutes);
+}
+
+function parseCalendar(body, minutes) {
+  const now = Date.now();
+  const horizon = now + minutes * 60000;
+  const events = [];
+  for (const event of (body.results && body.results.events) || []) {
+    if (String(event.status || "confirmed") === "cancelled") continue;
+    const start = eventStart(event);
+    if (!start) continue;
+    const stamp = start.getTime();
+    if (stamp + 5 * 60000 < now || stamp > horizon) continue;
+    const endValue = (event.end && (event.end.dateTime || event.end.date)) || "";
+    const end = endValue ? new Date(endValue) : new Date(stamp + 30 * 60000);
+    events.push({
+      key: "granola:" + (event.id || event.iCalUID || event.summary || stamp),
+      summary: String(event.summary || "Meeting"),
+      start: Math.floor(stamp / 1000),
+      end: Math.floor(end.getTime() / 1000),
+      join_url: joinUrl(event),
+      location: String(event.location || ""),
+      calendar: String(event.calendarId || "Granola"),
+      html_link: String(event.htmlLink || ""),
+    });
+  }
+  events.sort((a, b) => a.start - b.start || a.summary.localeCompare(b.summary));
+  return events;
+}
+
 async function start() {
   await ensure();
   const target = await waitMain();
@@ -302,6 +428,12 @@ async function main() {
     case "state":
       console.log(JSON.stringify(await readState()));
       return;
+    case "calendar": {
+      const at = process.argv.indexOf("--minutes");
+      const minutes = at > 0 ? Number(process.argv[at + 1]) || 120 : 120;
+      console.log(JSON.stringify(await calendar(minutes)));
+      return;
+    }
     case "watch": {
       for (;;) {
         try {

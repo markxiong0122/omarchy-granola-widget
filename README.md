@@ -177,6 +177,25 @@ supervises it.
 To keep the local recorder instead, put `"engine": "recorder"` in the plugin's
 entry in `~/.config/omarchy/shell.json`.
 
+### Granola's calendar, without the app running
+
+The app is already connected to Google Calendar, and its session token is good
+for six hours. `bin/granola-engine calendar` calls the same endpoint the app's
+"Coming up" section uses, and prints the events as JSON — no app window, no ICS
+feed and no Google OAuth client:
+
+```bash
+bin/granola-engine calendar --minutes 1440
+```
+
+Each event carries `summary`, `start`, `end`, `join_url` (Meet/Zoom/Teams),
+`location`, `calendar` and `html_link`. The token is cached in
+`~/.cache/omarchy-meeting-notes/granola-token.json` (mode 600); when it expires
+the helper launches Granola briefly to refresh it, then quits.
+
+This is a private endpoint (`POST /v1/refresh-calendar-events`), so it can
+change with a Granola update; the plugin treats it as best-effort.
+
 ## Using the panel
 
 Click the note icon on the right of the bar. The panel has:

@@ -784,7 +784,7 @@ BarWidget {
     owner: root
     bar: root.bar
     open: root.opened
-    centerOnBar: true
+    centerOnBar: false
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(880))
     contentHeight: panel.fittedContentHeight(Style.space(580))

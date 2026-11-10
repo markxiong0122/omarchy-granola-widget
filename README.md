@@ -193,6 +193,10 @@ Each event carries `summary`, `start`, `end`, `join_url` (Meet/Zoom/Teams),
 `~/.cache/omarchy-meeting-notes/granola-token.json` (mode 600); when it expires
 the helper launches Granola briefly to refresh it, then quits.
 
+The plugin polls it once a minute and shows a card two minutes before an event:
+the title, when it starts, **Start Granola**, **Join** when the event has a
+Meet/Zoom/Teams link, and **Dismiss**.
+
 This is a private endpoint (`POST /v1/refresh-calendar-events`), so it can
 change with a Granola update; the plugin treats it as best-effort.
 

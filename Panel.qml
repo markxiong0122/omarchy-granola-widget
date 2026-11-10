@@ -192,7 +192,11 @@ BarWidget {
   property string granolaDocumentId: ""
 
   onUseGranolaChanged: MeetingDetect.useGranola = root.useGranola
-  Component.onCompleted: MeetingDetect.useGranola = root.useGranola
+  onGranolaInstalledChanged: MeetingDetect.granolaAvailable = root.granolaInstalled
+  Component.onCompleted: {
+    MeetingDetect.useGranola = root.useGranola
+    MeetingDetect.granolaAvailable = root.granolaInstalled
+  }
 
   readonly property bool capturing:
     recorderState === "recording" || recorderState === "paused" || recorderState === "stopping"

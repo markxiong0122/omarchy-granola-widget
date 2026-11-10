@@ -53,7 +53,6 @@ The installer:
 - appends the `Enhanced notes` action to
   `~/.config/omarchy-meeting-recorder/config.toml`
 - creates `~/Documents/Meetings`
-- creates `~/.config/omarchy-meeting-notes/granola.json` as an empty template
 - offers to install Meeting Recorder if it is missing
 
 It never edits your Hyprland keybindings. To open the panel with a key, add to
@@ -262,18 +261,8 @@ them:
 `~/.cache/omarchy-meeting-notes/granola` for five minutes. Granola stays
 read-only — nothing is written back.
 
-If you have a Granola **Business/Enterprise** API key and prefer the REST API,
-put it in `~/.config/omarchy-meeting-notes/granola.json` instead:
-
-```json
-{
-  "apiKey": "grn_...",
-  "apiUrl": "https://public-api.granola.ai"
-}
-```
-
-The helper uses the API key when present and falls back to the MCP token
-otherwise.
+MCP is the one connection the plugin uses: it needs no API key, and the
+device flow works on the Free plan as well as Business/Enterprise.
 
 
 ## How it works
@@ -302,7 +291,7 @@ otherwise.
 - `bin/recorder-chip` waits for the recording to start, then shrinks the
   recorder window once, and only if it is still the full one.
 - `bin/granola-index` reads Granola through the official MCP connection
-  (or a Business API key, when configured) and caches each note as Markdown.
+  and caches each note as Markdown.
 - `bin/granola-oauth` runs the device-code OAuth flow, stores the tokens,
   and refreshes them; `--status` shows the connected account.
 - `bin/enhanced-notes` is a Meeting Recorder action. It gets `MEETING_*`
@@ -345,14 +334,16 @@ JSON file on the next poll.
   call; the **Enhanced notes** action reads it. Use the recorder's `[a]` notes
   panel during a meeting to jot notes before the AI enhancement.
 - Granola's public API cannot create notes or accept audio. The optional
-  Granola source is read-only, and API keys require a Business plan.
+  Granola source is read-only and goes through Granola's own MCP connection.
 - Meeting detection reads only the local PulseAudio capture list; it makes no
   network request and uses no calendar account.
 
 ## Publishing it
 
 The repo root is the plugin folder: `manifest.json`, `Panel.qml`,
-`MeetingDetect.qml`, `qmldir`, and `bin/`. That means it can be installed
+`MeetingDetect.qml`, the shared pieces the panel loads
+(`GranolaAuthPane.qml`, `PanelScrollbar.qml`, `Markdown.js`), `qmldir`, and
+`bin/`. That means it can be installed
 directly from git:
 
 ```bash

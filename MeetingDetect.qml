@@ -43,7 +43,7 @@ Item {
   readonly property int graceMinutes: 10
 
   property string recorderState: "off"
-  property bool recorderAvailable: true
+  property bool recorderAvailable: false
 
   property bool detected: false
   property string appLabel: ""

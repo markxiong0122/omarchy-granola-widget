@@ -5,18 +5,15 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "Markdown.js" as Markdown
 
-// Meetings, in the bar: the recent ones on the left, the enhanced note on the
-// right, and the recorder's start/stop controls on top. The text is whatever
-// Meeting Recorder wrote; this panel only reads it. The one thing it creates is
-// a request to the recorder, never a file of its own.
+// Meetings, in the bar: the recent ones on the left, the note on the right,
+// and the start/stop controls on top. The text is whatever Meeting Recorder
+// or Granola wrote; this panel only reads it. The one thing it creates is a
+// request to a helper, never a file of its own.
 BarWidget {
   id: root
   moduleName: "markxiong.granola"
-
-  // Touching the singleton is what creates it; it watches the microphone and
-  // shows the prompt even while this popup is closed.
-  readonly property var detectService: MeetingDetect
 
 
   // ---- Data -------------------------------------------------------------
@@ -57,91 +54,7 @@ BarWidget {
     return root.noteBody
   }
 
-  // Qt's MarkdownText keeps the hashes and gives every heading the same
-  // weight. Turning the note into a small, controlled HTML fragment makes the
-  // pane easier to read: quieter headings, real bullets, and no raw markup.
-  function escapeHtml(text) {
-    return String(text || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-  }
-
-  function inlineMarkdown(text) {
-    var out = String(text || "")
-    out = out.replace(/`([^`]+)`/g, "<code>$1</code>")
-    out = out.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-    out = out.replace(/(^|[^\w])_([^_]+)_/g, "$1<i>$2</i>")
-    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    return out
-  }
-
-  function markdownHtml(markdown) {
-    var lines = String(markdown || "").split("\n")
-    var html = []
-    var i = 0
-    while (i < lines.length) {
-      var raw = lines[i]
-      var line = raw.trim()
-      if (line === "") { i++; continue }
-
-      // Fenced code: keep it verbatim, monospaced, and dim.
-      if (/^```/.test(line)) {
-        var code = []
-        i++
-        while (i < lines.length && !/^```/.test(lines[i].trim())) {
-          code.push(root.escapeHtml(lines[i]))
-          i++
-        }
-        html.push('<p><code>' + code.join("<br>") + '</code></p>')
-        i++
-        continue
-      }
-
-      var heading = line.match(/^(#{1,4})\s+(.*)$/)
-      if (heading) {
-        var size = ["4", "3", "3", "2"][heading[1].length - 1] || "3"
-        if (html.length > 0) html.push("<br>")
-        html.push('<p><font size="' + size + '"><b>'
-          + root.inlineMarkdown(root.escapeHtml(heading[2]))
-          + '</b></font></p>')
-        i++
-        continue
-      }
-
-      var bullet = raw.match(/^(\s*)[-*]\s+(.*)$/)
-      if (bullet) {
-        var depth = Math.min(3, Math.floor(bullet[1].length / 2))
-        var pad = ""
-        for (var d = 0; d < depth; d++) pad += "&nbsp;&nbsp;&nbsp;&nbsp;"
-        var body = bullet[2]
-        var task = /^\[([ xX])\]\s+(.*)$/.exec(body)
-        if (task) body = (task[1].trim() === "" ? "☐ " : "☑ ") + task[2]
-        else body = "• " + body
-        html.push('<p>' + pad + root.inlineMarkdown(root.escapeHtml(body)) + '</p>')
-        i++
-        continue
-      }
-
-      if (/^---+$/.test(line)) {
-        html.push("<hr>")
-        i++
-        continue
-      }
-
-      if (/^>\s?/.test(line)) {
-        html.push('<p><i>' + root.inlineMarkdown(root.escapeHtml(line.replace(/^>\s?/, ""))) + '</i></p>')
-        i++
-        continue
-      }
-
-      html.push("<p>" + root.inlineMarkdown(root.escapeHtml(line)) + "</p>")
-      i++
-    }
-    return '<html><body style="line-height:125%">' + html.join("") + "</body></html>"
-  }
-
-  readonly property string noteHtml: root.markdownHtml(root.paneText)
+  readonly property string noteHtml: Markdown.markdownHtml(root.paneText)
 
   property string meetingsDir: setting("meetingDir", "~/Documents/Meetings")
   property bool granolaSource: setting("granolaSource", true)
@@ -175,7 +88,9 @@ BarWidget {
   property int elapsed: 0
   property real progress: 0
   property string recorderTitle: ""
-  property bool recorderAvailable: false
+
+  // The singleton probes for the recorder binary; the panel follows it.
+  readonly property bool recorderAvailable: MeetingDetect.recorderAvailable
 
   // Granola as the recording engine: the official app does the capture,
   // transcription and summary, and we show its Nub and read the note via MCP.
@@ -320,7 +235,7 @@ BarWidget {
 
   function openGranolaAuthPage() {
     if (root.granolaAuthUrl === "") return
-    if (root.bar) root.bar.run("xdg-open " + root.bar.shellQuote(root.granolaAuthUrl))
+    if (root.bar) root.bar.run("xdg-open " + Util.shellQuote(root.granolaAuthUrl))
     else Qt.openUrlExternally(root.granolaAuthUrl)
   }
 
@@ -501,7 +416,7 @@ BarWidget {
   function openGranola() {
     var meeting = root.selectedMeeting
     if (!meeting || String(meeting.web_url || "") === "") return
-    if (root.bar) root.bar.run("xdg-open " + root.bar.shellQuote(meeting.web_url))
+    if (root.bar) root.bar.run("xdg-open " + Util.shellQuote(meeting.web_url))
     else Qt.openUrlExternally(meeting.web_url)
     root.close()
   }
@@ -509,7 +424,7 @@ BarWidget {
   function openFolder() {
     var meeting = root.selectedMeeting
     if (!meeting || meeting.source === "granola" || String(meeting.dir || "") === "") return
-    if (root.bar) root.bar.run("xdg-open " + root.bar.shellQuote(meeting.dir))
+    if (root.bar) root.bar.run("xdg-open " + Util.shellQuote(meeting.dir))
     else Qt.openUrlExternally("file://" + encodeURI(meeting.dir))
   }
 
@@ -567,30 +482,6 @@ BarWidget {
       waitForEnd: true
       onStreamFinished: {
         if (String(text || "").trim() !== "") root.indexError = String(text).trim()
-      }
-    }
-  }
-
-  // The recorder is a separate package, so the widget has to survive it being
-  // absent: probe for the binary, and let the probe retry until it appears.
-  Process {
-    id: whichProc
-    running: true
-    command: ["which", "omarchy-meeting-recorder"]
-    onExited: function (exitCode) {
-      root.recorderAvailable = exitCode === 0
-    }
-  }
-
-  Timer {
-    id: availableRetry
-    interval: 30000
-    running: !root.recorderAvailable
-    repeat: true
-    onTriggered: {
-      if (!whichProc.running) {
-        whichProc.running = false
-        whichProc.running = true
       }
     }
   }
@@ -1098,23 +989,13 @@ BarWidget {
               }
             }
 
-            Rectangle {
-              visible: listScroll.contentHeight > listScroll.height + 1
+            PanelScrollbar {
+              flickable: listScroll
+              foreground: root.fg
+              thumbWidth: Style.space(2)
+              minThumb: Style.space(16)
+              thumbOpacity: 0.28
               anchors.right: parent.right
-              anchors.top: listScroll.top
-              anchors.bottom: listScroll.bottom
-              width: Style.space(2)
-              radius: width / 2
-              color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.06)
-
-              Rectangle {
-                width: parent.width
-                radius: parent.radius
-                height: Math.max(Style.space(16),
-                  parent.height * listScroll.visibleArea.heightRatio)
-                y: (parent.height - height) * listScroll.visibleArea.yPosition
-                color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.28)
-              }
             }
 
             Column {
@@ -1262,30 +1143,17 @@ BarWidget {
                 font.pixelSize: Style.font.subtitle
                 wrapMode: TextEdit.Wrap
                 onLinkActivated: function (link) {
-                  if (root.bar) root.bar.run("xdg-open " + root.bar.shellQuote(link))
+                  if (root.bar) root.bar.run("xdg-open " + Util.shellQuote(link))
                   else Qt.openUrlExternally(link)
                 }
               }
             }
 
-            Rectangle {
-              id: noteScrollTrack
-              visible: noteScroll.contentHeight > noteScroll.height + 1
+            PanelScrollbar {
+              flickable: noteScroll
+              foreground: root.fg
               anchors.right: parent.right
-              anchors.top: noteScroll.top
-              anchors.bottom: noteScroll.bottom
-              width: Style.space(3)
-              radius: width / 2
-              color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.06)
-
-              Rectangle {
-                width: parent.width
-                radius: parent.radius
-                height: Math.max(Style.space(18),
-                  parent.height * noteScroll.visibleArea.heightRatio)
-                y: (parent.height - height) * noteScroll.visibleArea.yPosition
-                color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.30)
-              }
+              anchors.rightMargin: Style.space(8)
             }
 
             Column {
@@ -1352,92 +1220,15 @@ BarWidget {
               }
             }
 
-            Rectangle {
-              id: granolaAuthPane
+            GranolaAuthPane {
               visible: root.granolaAuthOpen
               anchors.fill: parent
-              color: Commons.Color.popups.background
               z: 20
-
-              Column {
-                anchors.centerIn: parent
-                width: Math.min(parent.width - Style.space(48), Style.space(420))
-                spacing: Style.space(10)
-
-                PanelSectionHeader {
-                  text: "CONNECT GRANOLA"
-                  foreground: root.fg
-                  fontFamily: root.ff
-                }
-
-                Text {
-                  width: parent.width
-                  text: "Sign in to Granola"
-                  textFormat: Text.PlainText
-                  color: root.fg
-                  font.family: root.ff
-                  font.pixelSize: Style.font.heading
-                  font.bold: true
-                }
-
-                Text {
-                  width: parent.width
-                  text: "Approve Meeting Notes for Omarchy in the browser. "
-                    + "Your notes are read-only; nothing is written back to Granola."
-                  textFormat: Text.PlainText
-                  wrapMode: Text.WordWrap
-                  color: Qt.darker(root.fg, 1.35)
-                  font.family: root.ff
-                  font.pixelSize: Style.font.bodySmall
-                }
-
-                Text {
-                  visible: root.granolaAuthCode !== ""
-                  width: parent.width
-                  text: root.granolaAuthCode
-                  textFormat: Text.PlainText
-                  horizontalAlignment: Text.AlignHCenter
-                  color: root.accent
-                  font.family: root.ff
-                  font.pixelSize: Style.font.display
-                  font.bold: true
-                  font.letterSpacing: 2
-                }
-
-                Row {
-                  width: parent.width
-                  spacing: Style.space(8)
-
-                  Button {
-                    text: "Open Granola"
-                    iconText: "\uF08E"
-                    foreground: root.fg
-                    accent: root.accent
-                    fontFamily: root.ff
-                    bordered: true
-                    enabled: root.granolaAuthUrl !== ""
-                    onClicked: root.openGranolaAuthPage()
-                  }
-
-                  Button {
-                    text: "Cancel"
-                    foreground: root.fg
-                    fontFamily: root.ff
-                    bordered: false
-                    onClicked: root.cancelGranolaAuth()
-                  }
-                }
-
-                Text {
-                  width: parent.width
-                  text: root.granolaAuthStatus
-                  textFormat: Text.PlainText
-                  wrapMode: Text.WordWrap
-                  color: Qt.darker(root.fg, 1.5)
-                  font.family: root.ff
-                  font.pixelSize: Style.font.caption
-                }
-              }
+              authCode: root.granolaAuthCode
+              authUrl: root.granolaAuthUrl
+              authStatus: root.granolaAuthStatus
+              onOpenPage: root.openGranolaAuthPage()
+              onCancel: root.cancelGranolaAuth()
             }
           }
         }

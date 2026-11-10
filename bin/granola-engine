@@ -8,13 +8,14 @@
 // capture, transcription and summary; this file only starts and stops it.
 //
 // Usage:
-//   granola-engine start [--title NAME]   start a note, hide the main window
+//   granola-engine start [--title NAME]   start a note (or a calendar event), hide the window
 //   granola-engine stop                   stop the current note
 //   granola-engine state                  one JSON line of state
 //   granola-engine watch                  NDJSON state, once a second
 //   granola-engine show                   bring the main window back
 //   granola-engine hide                   move the main window away
 //   granola-engine ensure                 launch the app if it is not up
+//   granola-engine calendar [--minutes N] events from Granola's calendar
 //
 // Commands are best-effort: when Granola is not installed or CDP is not up,
 // they exit non-zero and print a reason on stderr.
@@ -103,16 +104,8 @@ async function ensure() {
   if (await targets()) return;
   // An app launched by hand has no debugger. Take it over: otherwise the new
   // instance becomes a secondary and never opens a port.
-  try {
-    const listing = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
-    for (const line of listing.split("\n")) {
-      if (!line.includes("/omarchy-meeting-notes/granola/electron")) continue;
-      if (line.includes("--type=")) continue;
-      const pid = Number(line.trim().split(/\s+/)[0]);
-      if (pid) process.kill(pid, "SIGTERM");
-    }
-    await sleep(1500);
-  } catch {}
+  killApp();
+  await sleep(1500);
   const child = spawn(APP, [
     "--ozone-platform=wayland",
     `--remote-debugging-port=${PORT}`,
@@ -182,7 +175,8 @@ async function readState() {
   }
 }
 
-function quitApp() {
+// Quit Granola for good: SIGTERM every top-level (non-renderer) process.
+function killApp() {
   try {
     const listing = execFileSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
     for (const line of listing.split("\n")) {
@@ -231,7 +225,7 @@ async function apiToken() {
     page.close();
     if (launched) {
       await sleep(1200);
-      quitApp();
+      killApp();
     }
   }
 }
@@ -267,24 +261,21 @@ function eventStart(event) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-async function calendar(minutes) {
-  const token = await apiToken();
-  const response = await fetch(`${API}/refresh-calendar-events`, {
+async function postCalendar(token) {
+  return fetch(`${API}/refresh-calendar-events`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: "",
   });
+}
+
+async function calendar(minutes) {
+  let response = await postCalendar(await apiToken());
   if (response.status === 401) {
     // The cached token was rejected; refresh once through the app.
-    const fresh = await apiToken();
-    if (fresh === token) throw new Error("Granola rejected the calendar token");
-    const retry = await fetch(`${API}/refresh-calendar-events`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${fresh}`, "Content-Type": "application/json" },
-      body: "",
-    });
-    if (!retry.ok) throw new Error(`Granola calendar HTTP ${retry.status}`);
-    return parseCalendar(await retry.json(), minutes);
+    response = await postCalendar(await apiToken());
+    if (!response.ok) throw new Error(`Granola calendar HTTP ${response.status}`);
+    return parseCalendar(await response.json(), minutes);
   }
   if (!response.ok) throw new Error(`Granola calendar HTTP ${response.status}`);
   return parseCalendar(await response.json(), minutes);
@@ -387,15 +378,7 @@ async function start(title = "") {
       await sleep(300);
     }
     if (!clicked) throw new Error("the New note button is not on screen");
-    const deadline = Date.now() + WAIT;
-    while (Date.now() < deadline) {
-      const list = await targets();
-      const meeting = (list || []).find(
-        (t) => t.type === "page" && String(t.url).includes("app://ui/#/meeting/"),
-      );
-      if (meeting) break;
-      await sleep(250);
-    }
+    await waitMeeting();
     await sleep(600);
     moveMain("hide");
   } finally {
@@ -432,7 +415,7 @@ async function stop() {
     if (!process.env.GRANOLA_KEEP_RUNNING) {
       await sleep(20000);
       const settled = await readState();
-      if (!settled.transcribing) quitApp();
+      if (!settled.transcribing) killApp();
     }
   } finally {
     page.close();
@@ -461,7 +444,7 @@ async function main() {
       moveMain("hide");
       return;
     case "quit":
-      quitApp();
+      killApp();
       return;
     case "state":
       console.log(JSON.stringify(await readState()));

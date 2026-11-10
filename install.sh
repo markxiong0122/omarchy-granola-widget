@@ -98,16 +98,6 @@ with config.open("a", encoding="utf-8") as handle:
 print(f"    wrote {config}")
 PY
 
-if [[ ! -f "$notes_config_dir/granola.json" ]]; then
-  cat > "$notes_config_dir/granola.json" <<'JSON'
-{
-  "apiKey": "",
-  "apiUrl": "https://public-api.granola.ai"
-}
-JSON
-fi
-chmod 600 "$notes_config_dir/granola.json" 2>/dev/null || true
-
 say ""
 say "Meeting Notes is installed."
 
@@ -152,4 +142,4 @@ say ""
 say "Granola (read-only): connect with"
 say "  $here/bin/granola-oauth --connect"
 say "That opens Granola's device page; the panel then shows your notes alongside"
-say "local meetings. An API key in $notes_config_dir/granola.json is optional."
+say "local meetings."
